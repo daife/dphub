@@ -1,0 +1,14 @@
+[server]
+bind = "0.0.0.0:8000"
+
+[deepseek]
+api_key = "sk-your-deepseek-api-key"
+endpoint = "https://api.deepseek.com/beta/chat/completions"
+timeout_seconds = 120
+
+[quota]
+id_daily_limit = 250000
+verified_daily_limit = 1000000
+
+[database]
+path = "./data/dphub.sqlite"
