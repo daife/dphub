@@ -493,56 +493,76 @@ const ADMIN_HTML: &str = r#"<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>dphub 管理后台</title>
   <style>
-    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #20242a; }
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f6f8; color: #17202a; }
+    * { box-sizing: border-box; }
     body { margin: 0; }
-    header { background: #1f2937; color: #fff; padding: 18px 24px; }
-    header h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: 0; }
+    button, input, select { font: inherit; }
+    button { border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; font-weight: 650; padding: 10px 14px; }
+    button.secondary { background: #fff; border: 1px solid #cfd6df; color: #1f2937; }
+    button.danger { background: #b91c1c; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    input, select { width: 100%; border: 1px solid #cfd6df; border-radius: 6px; color: #111827; padding: 9px 10px; background: #fff; }
+    label { display: grid; gap: 6px; color: #5b6472; font-size: 13px; }
+    header { background: #111827; color: #fff; }
+    .topbar { max-width: 1180px; margin: 0 auto; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { font-size: 20px; margin: 0; letter-spacing: 0; }
+    h2 { font-size: 16px; margin: 0 0 14px; letter-spacing: 0; }
     main { max-width: 1180px; margin: 0 auto; padding: 22px; }
-    section { background: #fff; border: 1px solid #dfe3ea; border-radius: 8px; margin-bottom: 18px; padding: 18px; }
-    label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #4b5563; }
-    input, select, button { font: inherit; border-radius: 6px; border: 1px solid #cfd6df; padding: 9px 10px; background: #fff; color: #111827; }
-    button { cursor: pointer; background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 650; }
-    button.secondary { background: #fff; color: #1f2937; border-color: #cfd6df; }
-    button:disabled { opacity: .55; cursor: not-allowed; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .filters { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; align-items: end; }
-    .stat { border: 1px solid #e5e7eb; border-radius: 8px; padding: 13px; background: #fbfcfd; }
-    .stat strong { display: block; font-size: 23px; margin-top: 5px; color: #111827; }
+    .login-shell { min-height: calc(100vh - 58px); display: grid; place-items: center; padding: 24px; }
+    .login-card { width: min(420px, 100%); background: #fff; border: 1px solid #dfe4ec; border-radius: 8px; padding: 22px; box-shadow: 0 10px 32px rgba(17, 24, 39, .08); }
+    .login-card p { color: #5b6472; line-height: 1.5; margin: 4px 0 18px; }
+    .panel { background: #fff; border: 1px solid #dfe4ec; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stat { border: 1px solid #e5e9f0; border-radius: 8px; padding: 14px; background: #fbfcfd; color: #5b6472; }
+    .stat strong { display: block; color: #111827; font-size: 24px; margin-top: 6px; }
+    .toolbar { display: grid; grid-template-columns: 2fr repeat(5, 1fr); gap: 12px; align-items: end; }
+    .actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .grant { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+    .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { text-align: left; padding: 10px 9px; border-bottom: 1px solid #edf0f4; white-space: nowrap; }
-    th { color: #4b5563; font-size: 12px; background: #f9fafb; }
-    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
-    .grow { flex: 1 1 220px; }
-    .status { min-height: 22px; color: #4b5563; }
+    th, td { border-bottom: 1px solid #edf0f4; padding: 11px 9px; text-align: left; white-space: nowrap; }
+    th { background: #f9fafb; color: #5b6472; font-size: 12px; }
+    .status { min-height: 22px; color: #5b6472; margin-top: 10px; }
     .error { color: #b91c1c; }
     .ok { color: #047857; }
-    @media (max-width: 900px) { .grid, .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } table { display: block; overflow-x: auto; } }
-    @media (max-width: 560px) { main { padding: 14px; } .grid, .filters { grid-template-columns: 1fr; } }
+    .hidden { display: none !important; }
+    @media (max-width: 960px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grant { grid-template-columns: 1fr; } }
+    @media (max-width: 560px) { main { padding: 14px; } .topbar { padding: 14px; } .stats, .toolbar { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <header><h1>dphub 管理后台</h1></header>
-  <main>
-    <section>
-      <div class="row">
-        <label class="grow">管理员 Token
-          <input id="token" type="password" autocomplete="current-password" placeholder="config.toml 中的 admin.token">
-        </label>
-        <button id="saveToken" class="secondary">保存</button>
-        <button id="refresh">刷新</button>
-      </div>
-      <div id="status" class="status"></div>
-    </section>
+  <header>
+    <div class="topbar">
+      <h1>dphub 管理后台</h1>
+      <button id="logout" class="danger hidden">退出</button>
+    </div>
+  </header>
 
-    <section class="grid">
+  <div id="loginView" class="login-shell">
+    <section class="login-card">
+      <h2>管理员登录</h2>
+      <p>输入 `config.toml` 中配置的 `admin.token`。验证通过前不会展示任何用户和额度数据。</p>
+      <label>管理员 Token
+        <input id="token" type="password" autocomplete="current-password" placeholder="admin.token">
+      </label>
+      <div class="actions">
+        <button id="login">登录</button>
+      </div>
+      <div id="loginStatus" class="status"></div>
+    </section>
+  </div>
+
+  <main id="appView" class="hidden">
+    <section class="stats">
       <div class="stat">注册手机号数<strong id="registered">0</strong></div>
       <div class="stat">今日手机号总消耗<strong id="used">0</strong></div>
       <div class="stat">可存池总余额<strong id="pool">0</strong></div>
       <div class="stat">达到日额度人数<strong id="overLimit">0</strong></div>
     </section>
 
-    <section>
-      <div class="filters">
+    <section class="panel">
+      <h2>筛选用户</h2>
+      <div class="toolbar">
         <label>搜索
           <input id="q" placeholder="手机号 / 邀请码 / user_id">
         </label>
@@ -558,6 +578,13 @@ const ADMIN_HTML: &str = r#"<!doctype html>
         <label>最大今日用量
           <input id="maxUsed" type="number" min="0">
         </label>
+        <label>日额度状态
+          <select id="overDailyLimit">
+            <option value="">全部</option>
+            <option value="true">已达到</option>
+            <option value="false">未达到</option>
+          </select>
+        </label>
         <label>排序
           <select id="sort">
             <option value="phone_asc">手机号升序</option>
@@ -568,67 +595,75 @@ const ADMIN_HTML: &str = r#"<!doctype html>
             <option value="pool_asc">可存池从低到高</option>
           </select>
         </label>
-        <label>日额度状态
-          <select id="overDailyLimit">
-            <option value="">全部</option>
-            <option value="true">已达到日额度</option>
-            <option value="false">未达到日额度</option>
-          </select>
-        </label>
         <label>每页
           <select id="limit"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
         </label>
-        <button id="apply">应用筛选</button>
-        <button id="prev" class="secondary">上一页</button>
-        <button id="next" class="secondary">下一页</button>
+      </div>
+      <div class="actions">
+        <div>
+          <button id="apply">应用筛选</button>
+          <button id="refresh" class="secondary">刷新</button>
+        </div>
+        <div>
+          <button id="prev" class="secondary">上一页</button>
+          <button id="next" class="secondary">下一页</button>
+        </div>
       </div>
     </section>
 
-    <section>
-      <div class="row">
-        <label class="grow">发放手机号
+    <section class="panel">
+      <h2>发放可存池额度</h2>
+      <div class="grant">
+        <label>手机号
           <input id="grantPhone" placeholder="13800000000">
         </label>
-        <label class="grow">发放 token 数
+        <label>发放 token 数
           <input id="grantAmount" type="number" min="1" placeholder="250000">
         </label>
-        <button id="grant">发放可存池额度</button>
+        <button id="grant">发放</button>
       </div>
+      <div id="status" class="status"></div>
     </section>
 
-    <section>
-      <table>
-        <thead>
-          <tr>
-            <th>手机号</th>
-            <th>今日用量</th>
-            <th>日额度</th>
-            <th>可存池余额</th>
-            <th>邀请码</th>
-            <th>user_id</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody id="users"></tbody>
-      </table>
+    <section class="panel">
+      <h2>用户额度</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>手机号</th>
+              <th>今日用量</th>
+              <th>日额度</th>
+              <th>可存池余额</th>
+              <th>邀请码</th>
+              <th>user_id</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="users"></tbody>
+        </table>
+      </div>
       <div id="pager" class="status"></div>
     </section>
   </main>
+
   <script>
     const $ = id => document.getElementById(id);
     let offset = 0;
-    $("token").value = localStorage.getItem("dphub_admin_token") || "";
+    let adminToken = "";
 
     function number(v) { return Number(v || 0).toLocaleString("zh-CN"); }
     function escapeHtml(v) {
       return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
-    function setStatus(text, cls) { $("status").textContent = text || ""; $("status").className = "status " + (cls || ""); }
-    function authHeaders() { return { "Authorization": "Bearer " + $("token").value.trim() }; }
+    function setText(id, text) { $(id).textContent = text; }
+    function setStatus(id, text, cls) { $(id).textContent = text || ""; $(id).className = "status " + (cls || ""); }
+    function authHeaders() { return { "Authorization": "Bearer " + adminToken }; }
     function optional(params, key, value) { if (value !== undefined && value !== null && String(value).trim() !== "") params.set(key, value); }
+    function showApp() { $("loginView").classList.add("hidden"); $("appView").classList.remove("hidden"); $("logout").classList.remove("hidden"); }
+    function showLogin() { $("appView").classList.add("hidden"); $("logout").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
 
-    async function load() {
-      setStatus("加载中...");
+    async function fetchOverview(custom = {}) {
       const params = new URLSearchParams();
       optional(params, "q", $("q").value);
       optional(params, "min_pool", $("minPool").value);
@@ -637,15 +672,19 @@ const ADMIN_HTML: &str = r#"<!doctype html>
       optional(params, "max_used", $("maxUsed").value);
       optional(params, "sort", $("sort").value);
       optional(params, "over_daily_limit", $("overDailyLimit").value);
-      params.set("limit", $("limit").value);
-      params.set("offset", offset);
+      params.set("limit", custom.limit || $("limit").value);
+      params.set("offset", custom.offset ?? offset);
       const res = await fetch("/admin/api/overview?" + params.toString(), { headers: authHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "加载失败");
-      $("registered").textContent = number(data.totals.registered_phone_count);
-      $("used").textContent = number(data.totals.today_phone_used_tokens);
-      $("pool").textContent = number(data.totals.total_pool_balance);
-      $("overLimit").textContent = number(data.totals.over_daily_limit_count);
+      return data;
+    }
+
+    function render(data) {
+      setText("registered", number(data.totals.registered_phone_count));
+      setText("used", number(data.totals.today_phone_used_tokens));
+      setText("pool", number(data.totals.total_pool_balance));
+      setText("overLimit", number(data.totals.over_daily_limit_count));
       $("users").innerHTML = data.users.map(user => `
         <tr>
           <td>${escapeHtml(user.phone)}</td>
@@ -657,17 +696,47 @@ const ADMIN_HTML: &str = r#"<!doctype html>
           <td>${user.over_daily_limit ? "已达到日额度" : "正常"}</td>
         </tr>
       `).join("");
-      $("pager").textContent = `筛选结果 ${number(data.filtered_count)} 条，当前 ${data.offset + 1}-${Math.min(data.offset + data.users.length, data.filtered_count)}`;
+      const from = data.filtered_count === 0 ? 0 : data.offset + 1;
+      const to = Math.min(data.offset + data.users.length, data.filtered_count);
+      setText("pager", `筛选结果 ${number(data.filtered_count)} 条，当前 ${from}-${to}`);
       $("prev").disabled = offset === 0;
       $("next").disabled = offset + data.limit >= data.filtered_count;
-      setStatus("已更新", "ok");
+    }
+
+    async function load() {
+      setStatus("status", "加载中...");
+      const data = await fetchOverview();
+      render(data);
+      setStatus("status", "已更新", "ok");
+    }
+
+    async function login() {
+      const token = $("token").value.trim();
+      if (!token) {
+        setStatus("loginStatus", "请输入管理员 Token", "error");
+        return;
+      }
+      adminToken = token;
+      setStatus("loginStatus", "验证中...");
+      try {
+        const data = await fetchOverview({ limit: 1, offset: 0 });
+        localStorage.setItem("dphub_admin_token", adminToken);
+        showApp();
+        render(data);
+        setStatus("status", "已登录", "ok");
+        setStatus("loginStatus", "");
+      } catch (err) {
+        adminToken = "";
+        localStorage.removeItem("dphub_admin_token");
+        setStatus("loginStatus", err.message || "登录失败", "error");
+      }
     }
 
     async function grant() {
       const phone = $("grantPhone").value.trim();
       const amount = Number($("grantAmount").value);
       if (!phone || !Number.isFinite(amount) || amount <= 0) {
-        setStatus("请填写手机号和正数额度", "error");
+        setStatus("status", "请填写手机号和正数额度", "error");
         return;
       }
       const res = await fetch("/admin/api/pool/grant", {
@@ -677,16 +746,24 @@ const ADMIN_HTML: &str = r#"<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "发放失败");
-      setStatus(`${data.phone} 当前可存池余额 ${number(data.pool_balance)}`, "ok");
+      setStatus("status", `${data.phone} 当前可存池余额 ${number(data.pool_balance)}`, "ok");
       await load();
     }
 
-    $("saveToken").onclick = () => { localStorage.setItem("dphub_admin_token", $("token").value.trim()); setStatus("Token 已保存到本机浏览器", "ok"); };
-    $("refresh").onclick = () => load().catch(e => setStatus(e.message, "error"));
-    $("apply").onclick = () => { offset = 0; load().catch(e => setStatus(e.message, "error")); };
-    $("prev").onclick = () => { offset = Math.max(0, offset - Number($("limit").value)); load().catch(e => setStatus(e.message, "error")); };
-    $("next").onclick = () => { offset += Number($("limit").value); load().catch(e => setStatus(e.message, "error")); };
-    $("grant").onclick = () => grant().catch(e => setStatus(e.message, "error"));
+    $("login").onclick = () => login();
+    $("token").onkeydown = event => { if (event.key === "Enter") login(); };
+    $("logout").onclick = () => { adminToken = ""; localStorage.removeItem("dphub_admin_token"); $("token").value = ""; showLogin(); };
+    $("refresh").onclick = () => load().catch(e => setStatus("status", e.message, "error"));
+    $("apply").onclick = () => { offset = 0; load().catch(e => setStatus("status", e.message, "error")); };
+    $("prev").onclick = () => { offset = Math.max(0, offset - Number($("limit").value)); load().catch(e => setStatus("status", e.message, "error")); };
+    $("next").onclick = () => { offset += Number($("limit").value); load().catch(e => setStatus("status", e.message, "error")); };
+    $("grant").onclick = () => grant().catch(e => setStatus("status", e.message, "error"));
+
+    const savedToken = localStorage.getItem("dphub_admin_token");
+    if (savedToken) {
+      $("token").value = savedToken;
+      login();
+    }
   </script>
 </body>
 </html>"#;

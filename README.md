@@ -50,6 +50,7 @@ cd /root/dphub
 3. 修改配置：
 
 ```bash
+cp /root/dphub/config.toml.example /root/dphub/config.toml
 nano /root/dphub/config.toml
 ```
 
