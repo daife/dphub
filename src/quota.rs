@@ -1,4 +1,5 @@
 use chrono::{Local, NaiveDate};
+use serde::Serialize;
 use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, SqliteConnection, SqlitePool};
 use thiserror::Error;
@@ -38,6 +39,10 @@ pub enum QuotaError {
     InvalidInviteCode,
     #[error("phone is required to query invite code")]
     PhoneRequired,
+    #[error("phone account does not exist")]
+    PhoneNotFound,
+    #[error("invalid admin request")]
+    InvalidAdminRequest,
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
@@ -64,6 +69,64 @@ pub struct QuotaStatus {
 pub struct InviteCodeInfo {
     pub phone: String,
     pub invite_code: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminUserFilters {
+    pub query: Option<String>,
+    pub min_pool: Option<i64>,
+    pub max_pool: Option<i64>,
+    pub min_used: Option<i64>,
+    pub max_used: Option<i64>,
+    pub over_daily_limit: Option<bool>,
+    pub limit: usize,
+    pub offset: usize,
+    pub sort: AdminUserSort,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AdminUserSort {
+    #[default]
+    PhoneAsc,
+    PhoneDesc,
+    UsedDesc,
+    UsedAsc,
+    PoolDesc,
+    PoolAsc,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AdminUserInfo {
+    pub phone: String,
+    pub invite_code: String,
+    pub user_id: String,
+    pub pool_balance: i64,
+    pub today_used_tokens: i64,
+    pub daily_limit: i64,
+    pub over_daily_limit: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AdminTotals {
+    pub registered_phone_count: i64,
+    pub total_pool_balance: i64,
+    pub today_phone_used_tokens: i64,
+    pub over_daily_limit_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AdminOverview {
+    pub totals: AdminTotals,
+    pub filtered_count: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub users: Vec<AdminUserInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AdminGrantResult {
+    pub phone: String,
+    pub pool_balance: i64,
 }
 
 impl QuotaStore {
@@ -342,6 +405,140 @@ impl QuotaStore {
         Ok(InviteCodeInfo {
             phone: phone.to_owned(),
             invite_code,
+        })
+    }
+
+    pub async fn admin_overview(
+        &self,
+        config: &QuotaConfig,
+        filters: AdminUserFilters,
+    ) -> Result<AdminOverview> {
+        let date = today();
+        let limit = filters.limit.clamp(1, 500);
+        let offset = filters.offset;
+        let mut rows: Vec<AdminUserInfo> = sqlx::query_as::<_, (String, String, String, i64, i64)>(
+            r#"
+            SELECT
+                pa.phone,
+                pa.invite_code,
+                pa.user_id,
+                COALESCE(pp.balance_tokens, 0) AS pool_balance,
+                COALESCE(du.total_tokens, 0) AS today_used_tokens
+            FROM phone_account pa
+            LEFT JOIN phone_pool pp ON pp.phone = pa.phone
+            LEFT JOIN daily_usage du
+                ON du.subject_type = 'phone'
+                AND du.subject_value = pa.phone
+                AND du.usage_date = ?1
+            "#,
+        )
+        .bind(date.to_string())
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(
+            |(phone, invite_code, user_id, pool_balance, today_used_tokens)| AdminUserInfo {
+                phone,
+                invite_code,
+                user_id,
+                pool_balance,
+                today_used_tokens,
+                daily_limit: config.verified_daily_limit,
+                over_daily_limit: today_used_tokens >= config.verified_daily_limit,
+            },
+        )
+        .collect();
+
+        let totals = AdminTotals {
+            registered_phone_count: rows.len() as i64,
+            total_pool_balance: rows.iter().map(|row| row.pool_balance).sum(),
+            today_phone_used_tokens: rows.iter().map(|row| row.today_used_tokens).sum(),
+            over_daily_limit_count: rows.iter().filter(|row| row.over_daily_limit).count() as i64,
+        };
+
+        if let Some(query) = filters.query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+            let query = query.to_ascii_lowercase();
+            rows.retain(|row| {
+                row.phone.to_ascii_lowercase().contains(&query)
+                    || row.invite_code.to_ascii_lowercase().contains(&query)
+                    || row.user_id.to_ascii_lowercase().contains(&query)
+            });
+        }
+        if let Some(min_pool) = filters.min_pool {
+            rows.retain(|row| row.pool_balance >= min_pool);
+        }
+        if let Some(max_pool) = filters.max_pool {
+            rows.retain(|row| row.pool_balance <= max_pool);
+        }
+        if let Some(min_used) = filters.min_used {
+            rows.retain(|row| row.today_used_tokens >= min_used);
+        }
+        if let Some(max_used) = filters.max_used {
+            rows.retain(|row| row.today_used_tokens <= max_used);
+        }
+        if let Some(over_daily_limit) = filters.over_daily_limit {
+            rows.retain(|row| row.over_daily_limit == over_daily_limit);
+        }
+
+        match filters.sort {
+            AdminUserSort::PhoneAsc => rows.sort_by(|a, b| a.phone.cmp(&b.phone)),
+            AdminUserSort::PhoneDesc => rows.sort_by(|a, b| b.phone.cmp(&a.phone)),
+            AdminUserSort::UsedDesc => rows.sort_by(|a, b| {
+                b.today_used_tokens
+                    .cmp(&a.today_used_tokens)
+                    .then_with(|| a.phone.cmp(&b.phone))
+            }),
+            AdminUserSort::UsedAsc => rows.sort_by(|a, b| {
+                a.today_used_tokens
+                    .cmp(&b.today_used_tokens)
+                    .then_with(|| a.phone.cmp(&b.phone))
+            }),
+            AdminUserSort::PoolDesc => rows.sort_by(|a, b| {
+                b.pool_balance
+                    .cmp(&a.pool_balance)
+                    .then_with(|| a.phone.cmp(&b.phone))
+            }),
+            AdminUserSort::PoolAsc => rows.sort_by(|a, b| {
+                a.pool_balance
+                    .cmp(&b.pool_balance)
+                    .then_with(|| a.phone.cmp(&b.phone))
+            }),
+        }
+
+        let filtered_count = rows.len();
+        let users = rows.into_iter().skip(offset).take(limit).collect();
+
+        Ok(AdminOverview {
+            totals,
+            filtered_count,
+            limit,
+            offset,
+            users,
+        })
+    }
+
+    pub async fn admin_grant_phone_pool(
+        &self,
+        phone: &str,
+        amount: i64,
+    ) -> Result<AdminGrantResult> {
+        let phone = phone.trim();
+        if phone.is_empty() || amount <= 0 {
+            return Err(QuotaError::InvalidAdminRequest);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        if !phone_account_exists(&mut tx, phone).await? {
+            return Err(QuotaError::PhoneNotFound);
+        }
+        ensure_phone_pool_row(&mut tx, phone).await?;
+        add_phone_pool(&mut tx, phone, amount).await?;
+        let pool_balance = get_phone_pool(&mut tx, phone).await?;
+        tx.commit().await?;
+
+        Ok(AdminGrantResult {
+            phone: phone.to_owned(),
+            pool_balance,
         })
     }
 

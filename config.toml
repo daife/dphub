@@ -14,3 +14,6 @@ referral_inviter_bonus = 250000
 
 [database]
 path = "./data/dphub.sqlite"
+
+[admin]
+token = "change-this-admin-token"

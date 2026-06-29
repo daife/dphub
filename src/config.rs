@@ -9,6 +9,7 @@ pub struct Config {
     pub deepseek: DeepSeekConfig,
     pub quota: QuotaConfig,
     pub database: DatabaseConfig,
+    pub admin: AdminConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -35,6 +36,11 @@ pub struct QuotaConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct DatabaseConfig {
     pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AdminConfig {
+    pub token: String,
 }
 
 impl Config {
@@ -76,6 +82,10 @@ impl Config {
         anyhow::ensure!(
             self.deepseek.timeout_seconds > 0,
             "deepseek.timeout_seconds must be positive"
+        );
+        anyhow::ensure!(
+            !self.admin.token.trim().is_empty(),
+            "admin.token must not be empty"
         );
         Ok(())
     }
