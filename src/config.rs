@@ -28,6 +28,8 @@ pub struct DeepSeekConfig {
 pub struct QuotaConfig {
     pub id_daily_limit: i64,
     pub verified_daily_limit: i64,
+    pub referral_new_user_bonus: i64,
+    pub referral_inviter_bonus: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,6 +64,14 @@ impl Config {
         anyhow::ensure!(
             self.quota.verified_daily_limit > 0,
             "quota.verified_daily_limit must be positive"
+        );
+        anyhow::ensure!(
+            self.quota.referral_new_user_bonus >= 0,
+            "quota.referral_new_user_bonus must not be negative"
+        );
+        anyhow::ensure!(
+            self.quota.referral_inviter_bonus >= 0,
+            "quota.referral_inviter_bonus must not be negative"
         );
         anyhow::ensure!(
             self.deepseek.timeout_seconds > 0,

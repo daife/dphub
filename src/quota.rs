@@ -2,6 +2,7 @@ use chrono::{Local, NaiveDate};
 use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, SqliteConnection, SqlitePool};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::config::QuotaConfig;
 
@@ -31,11 +32,31 @@ pub enum QuotaError {
     InvalidAuthorization,
     #[error("quota exceeded")]
     QuotaExceeded,
+    #[error("phone already registered")]
+    PhoneAlreadyRegistered,
+    #[error("invite code does not exist")]
+    InvalidInviteCode,
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
 
 pub type Result<T> = std::result::Result<T, QuotaError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistrationResult {
+    pub phone: String,
+    pub invite_code: String,
+    pub user_id: String,
+    pub pool_balance: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotaStatus {
+    pub used_tokens: i64,
+    pub daily_limit: i64,
+    pub usage_ratio: f64,
+    pub pool_balance: Option<i64>,
+}
 
 impl QuotaStore {
     pub async fn connect(path: &std::path::Path) -> anyhow::Result<Self> {
@@ -81,6 +102,31 @@ impl QuotaStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS id_account (
+                android_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL UNIQUE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS phone_account (
+                phone TEXT PRIMARY KEY,
+                invite_code TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL UNIQUE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        self.migrate_phone_account_user_id().await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS phone_pool (
                 phone TEXT PRIMARY KEY,
                 balance_tokens INTEGER NOT NULL DEFAULT 0
@@ -90,6 +136,60 @@ impl QuotaStore {
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    async fn migrate_phone_account_user_id(&self) -> Result<()> {
+        let columns: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('phone_account')")
+            .fetch_all(&self.pool)
+            .await?;
+        if columns.iter().any(|column| column.0 == "user_id") {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("ALTER TABLE phone_account RENAME TO phone_account_old")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            r#"
+            CREATE TABLE phone_account (
+                phone TEXT PRIMARY KEY,
+                invite_code TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL UNIQUE
+            );
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT phone, invite_code FROM phone_account_old")
+                .fetch_all(&mut *tx)
+                .await?;
+        for (phone, invite_code) in rows {
+            loop {
+                let user_id = new_user_id();
+                let result = sqlx::query(
+                    "INSERT INTO phone_account (phone, invite_code, user_id) VALUES (?1, ?2, ?3)",
+                )
+                .bind(&phone)
+                .bind(&invite_code)
+                .bind(&user_id)
+                .execute(&mut *tx)
+                .await;
+                match result {
+                    Ok(_) => break,
+                    Err(sqlx::Error::Database(err)) if err.is_unique_violation() => continue,
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
+        sqlx::query("DROP TABLE phone_account_old")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -107,6 +207,7 @@ impl QuotaStore {
 
         let target = match principal {
             Principal::IdOnly { id } => {
+                ensure_id_account_row(&mut tx, id).await?;
                 ensure_daily_row(&mut tx, "id", id, date).await?;
                 let id_used = get_daily_usage(&mut tx, "id", id, date).await?;
                 if id_used < config.id_daily_limit {
@@ -116,6 +217,8 @@ impl QuotaStore {
                 }
             }
             Principal::IdAndPhone { id, phone } => {
+                ensure_id_account_row(&mut tx, id).await?;
+                ensure_phone_account_row(&mut tx, phone).await?;
                 ensure_daily_row(&mut tx, "id", id, date).await?;
                 ensure_daily_row(&mut tx, "phone", phone, date).await?;
                 ensure_phone_pool_row(&mut tx, phone).await?;
@@ -142,6 +245,130 @@ impl QuotaStore {
 
         tx.commit().await?;
         Ok(target)
+    }
+
+    pub async fn register_phone(
+        &self,
+        phone: &str,
+        invite_code: Option<&str>,
+        config: &QuotaConfig,
+    ) -> Result<RegistrationResult> {
+        let phone = phone.trim();
+        if phone.is_empty() {
+            return Err(QuotaError::PhoneAlreadyRegistered);
+        }
+
+        let invite_code = invite_code
+            .map(str::trim)
+            .filter(|code| !code.is_empty());
+
+        let mut tx = self.pool.begin().await?;
+
+        if phone_account_exists(&mut tx, phone).await? {
+            return Err(QuotaError::PhoneAlreadyRegistered);
+        }
+
+        let inviter_phone = match invite_code {
+            Some(code) => Some(
+                get_phone_by_invite_code(&mut tx, code)
+                    .await?
+                    .ok_or(QuotaError::InvalidInviteCode)?,
+            ),
+            None => None,
+        };
+
+        let (new_invite_code, user_id) = insert_phone_account_with_new_invite(&mut tx, phone).await?;
+        ensure_phone_pool_row(&mut tx, phone).await?;
+
+        if let Some(inviter_phone) = inviter_phone.as_deref() {
+            ensure_phone_pool_row(&mut tx, inviter_phone).await?;
+            add_phone_pool(&mut tx, phone, config.referral_new_user_bonus).await?;
+            add_phone_pool(&mut tx, inviter_phone, config.referral_inviter_bonus).await?;
+        }
+
+        let pool_balance = get_phone_pool(&mut tx, phone).await?;
+        tx.commit().await?;
+
+        Ok(RegistrationResult {
+            phone: phone.to_owned(),
+            invite_code: new_invite_code,
+            user_id,
+            pool_balance,
+        })
+    }
+
+    pub async fn user_id_for_principal(&self, principal: &Principal) -> Result<String> {
+        let mut tx = self.pool.begin().await?;
+        let user_id = match principal {
+            Principal::IdOnly { id } => {
+                ensure_id_account_row(&mut tx, id).await?;
+                get_id_user_id(&mut tx, id).await?
+            }
+            Principal::IdAndPhone { phone, .. } => {
+                ensure_phone_account_row(&mut tx, phone).await?;
+                get_phone_user_id(&mut tx, phone).await?
+            }
+        };
+        tx.commit().await?;
+        Ok(user_id)
+    }
+
+    pub async fn quota_status(
+        &self,
+        principal: &Principal,
+        config: &QuotaConfig,
+    ) -> Result<QuotaStatus> {
+        self.quota_status_for_date(principal, config, today()).await
+    }
+
+    async fn quota_status_for_date(
+        &self,
+        principal: &Principal,
+        config: &QuotaConfig,
+        date: NaiveDate,
+    ) -> Result<QuotaStatus> {
+        let mut tx = self.pool.begin().await?;
+
+        let status = match principal {
+            Principal::IdOnly { id } => {
+                ensure_id_account_row(&mut tx, id).await?;
+                ensure_daily_row(&mut tx, "id", id, date).await?;
+                let used_tokens = get_daily_usage(&mut tx, "id", id, date).await?;
+                QuotaStatus {
+                    used_tokens,
+                    daily_limit: config.id_daily_limit,
+                    usage_ratio: usage_ratio(used_tokens, config.id_daily_limit),
+                    pool_balance: None,
+                }
+            }
+            Principal::IdAndPhone { id, phone } => {
+                ensure_id_account_row(&mut tx, id).await?;
+                ensure_phone_account_row(&mut tx, phone).await?;
+                ensure_daily_row(&mut tx, "id", id, date).await?;
+                ensure_daily_row(&mut tx, "phone", phone, date).await?;
+                ensure_phone_pool_row(&mut tx, phone).await?;
+
+                let id_used = get_daily_usage(&mut tx, "id", id, date).await?;
+                let phone_used = get_daily_usage(&mut tx, "phone", phone, date).await?;
+                let used_tokens = id_used.max(phone_used);
+                if id_used != used_tokens {
+                    set_daily_usage(&mut tx, "id", id, date, used_tokens).await?;
+                }
+                if phone_used != used_tokens {
+                    set_daily_usage(&mut tx, "phone", phone, date, used_tokens).await?;
+                }
+
+                QuotaStatus {
+                    used_tokens,
+                    daily_limit: config.verified_daily_limit,
+                    usage_ratio: usage_ratio(used_tokens, config.verified_daily_limit),
+                    pool_balance: Some(get_phone_pool(&mut tx, phone).await?),
+                }
+            }
+        };
+
+        tx.commit().await?;
+        Ok(status)
     }
 
     pub async fn charge(
@@ -268,6 +495,21 @@ fn today() -> NaiveDate {
     Local::now().date_naive()
 }
 
+fn new_invite_code() -> String {
+    Uuid::new_v4().simple().to_string()[..12].to_ascii_uppercase()
+}
+
+fn new_user_id() -> String {
+    format!("u_{}", Uuid::new_v4().simple())
+}
+
+fn usage_ratio(used_tokens: i64, daily_limit: i64) -> f64 {
+    if daily_limit <= 0 {
+        return 1.0;
+    }
+    ((used_tokens as f64) / (daily_limit as f64)).clamp(0.0, 1.0)
+}
+
 async fn ensure_daily_row(
     conn: &mut SqliteConnection,
     subject_type: &str,
@@ -296,6 +538,146 @@ async fn ensure_phone_pool_row(
         .bind(phone)
         .execute(conn)
         .await?;
+    Ok(())
+}
+
+async fn ensure_phone_account_row(
+    conn: &mut SqliteConnection,
+    phone: &str,
+) -> std::result::Result<(), sqlx::Error> {
+    if phone_account_exists(conn, phone).await? {
+        return Ok(());
+    }
+    let (_invite_code, _user_id) = insert_phone_account_with_new_invite(conn, phone).await?;
+    Ok(())
+}
+
+async fn ensure_id_account_row(
+    conn: &mut SqliteConnection,
+    android_id: &str,
+) -> std::result::Result<(), sqlx::Error> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM id_account WHERE android_id = ?1")
+        .bind(android_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    if row.0 > 0 {
+        return Ok(());
+    }
+
+    for _ in 0..10 {
+        let user_id = new_user_id();
+        let result = sqlx::query("INSERT INTO id_account (android_id, user_id) VALUES (?1, ?2)")
+            .bind(android_id)
+            .bind(&user_id)
+            .execute(&mut *conn)
+            .await;
+
+        match result {
+            Ok(_) => return Ok(()),
+            Err(sqlx::Error::Database(err)) if err.is_unique_violation() => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(sqlx::Error::Protocol(
+        "failed to generate a unique user_id".to_owned(),
+    ))
+}
+
+async fn phone_account_exists(
+    conn: &mut SqliteConnection,
+    phone: &str,
+) -> std::result::Result<bool, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM phone_account WHERE phone = ?1")
+        .bind(phone)
+        .fetch_one(conn)
+        .await?;
+    Ok(row.0 > 0)
+}
+
+async fn get_phone_by_invite_code(
+    conn: &mut SqliteConnection,
+    invite_code: &str,
+) -> std::result::Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT phone FROM phone_account WHERE invite_code = ?1")
+            .bind(invite_code)
+            .fetch_optional(conn)
+            .await?;
+    Ok(row.map(|row| row.0))
+}
+
+async fn insert_phone_account_with_new_invite(
+    conn: &mut SqliteConnection,
+    phone: &str,
+) -> std::result::Result<(String, String), sqlx::Error> {
+    for _ in 0..10 {
+        let invite_code = new_invite_code();
+        let user_id = new_user_id();
+        let result = sqlx::query(
+            "INSERT INTO phone_account (phone, invite_code, user_id) VALUES (?1, ?2, ?3)",
+        )
+                .bind(phone)
+                .bind(&invite_code)
+                .bind(&user_id)
+                .execute(&mut *conn)
+                .await;
+
+        match result {
+            Ok(_) => return Ok((invite_code, user_id)),
+            Err(sqlx::Error::Database(err)) if err.is_unique_violation() => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(sqlx::Error::Protocol(
+        "failed to generate a unique invite code".to_owned(),
+    ))
+}
+
+async fn get_id_user_id(
+    conn: &mut SqliteConnection,
+    android_id: &str,
+) -> std::result::Result<String, sqlx::Error> {
+    let row: (String,) = sqlx::query_as("SELECT user_id FROM id_account WHERE android_id = ?1")
+        .bind(android_id)
+        .fetch_one(conn)
+        .await?;
+    Ok(row.0)
+}
+
+async fn get_phone_user_id(
+    conn: &mut SqliteConnection,
+    phone: &str,
+) -> std::result::Result<String, sqlx::Error> {
+    let row: (String,) = sqlx::query_as("SELECT user_id FROM phone_account WHERE phone = ?1")
+        .bind(phone)
+        .fetch_one(conn)
+        .await?;
+    Ok(row.0)
+}
+
+async fn add_phone_pool(
+    conn: &mut SqliteConnection,
+    phone: &str,
+    amount: i64,
+) -> std::result::Result<(), sqlx::Error> {
+    if amount <= 0 {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO phone_pool (phone, balance_tokens)
+        VALUES (?1, ?2)
+        ON CONFLICT(phone)
+        DO UPDATE SET balance_tokens = phone_pool.balance_tokens + excluded.balance_tokens
+        "#,
+    )
+    .bind(phone)
+    .bind(amount)
+    .execute(conn)
+    .await?;
     Ok(())
 }
 
@@ -388,6 +770,8 @@ mod tests {
         QuotaConfig {
             id_daily_limit: 10,
             verified_daily_limit: 20,
+            referral_new_user_bonus: 250000,
+            referral_inviter_bonus: 250000,
         }
     }
 
