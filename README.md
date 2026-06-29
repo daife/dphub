@@ -144,7 +144,9 @@ Authorization: Bearer <admin.token>
 后台当前支持：
 
 - 查看注册手机号总数。
+- 查看已建档 androidid 总数。
 - 查看所有手机号今日总 token 消耗。
+- 查看所有 androidid 今日总 token 消耗。
 - 查看所有手机号可存池总余额。
 - 查看已达到手机号日额度的人数。
 - 按手机号、邀请码、`user_id` 搜索。
@@ -179,8 +181,10 @@ curl -X GET 'http://YOUR_SERVER_IP:8000/admin/api/overview?limit=50&offset=0&sor
 {
   "totals": {
     "registered_phone_count": 12,
+    "android_id_count": 20,
     "total_pool_balance": 3000000,
     "today_phone_used_tokens": 450000,
+    "today_android_id_used_tokens": 620000,
     "over_daily_limit_count": 1
   },
   "filtered_count": 12,

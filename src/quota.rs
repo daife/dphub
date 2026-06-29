@@ -109,8 +109,10 @@ pub struct AdminUserInfo {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AdminTotals {
     pub registered_phone_count: i64,
+    pub android_id_count: i64,
     pub total_pool_balance: i64,
     pub today_phone_used_tokens: i64,
+    pub today_android_id_used_tokens: i64,
     pub over_daily_limit_count: i64,
 }
 
@@ -451,8 +453,10 @@ impl QuotaStore {
 
         let totals = AdminTotals {
             registered_phone_count: rows.len() as i64,
+            android_id_count: count_id_accounts(&self.pool).await?,
             total_pool_balance: rows.iter().map(|row| row.pool_balance).sum(),
             today_phone_used_tokens: rows.iter().map(|row| row.today_used_tokens).sum(),
+            today_android_id_used_tokens: sum_daily_usage(&self.pool, "id", date).await?,
             over_daily_limit_count: rows.iter().filter(|row| row.over_daily_limit).count() as i64,
         };
 
@@ -981,6 +985,32 @@ async fn add_daily_usage(
     .execute(conn)
     .await?;
     Ok(())
+}
+
+async fn count_id_accounts(pool: &SqlitePool) -> std::result::Result<i64, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(1) FROM id_account")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
+}
+
+async fn sum_daily_usage(
+    pool: &SqlitePool,
+    subject_type: &str,
+    date: NaiveDate,
+) -> std::result::Result<i64, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(total_tokens), 0)
+        FROM daily_usage
+        WHERE subject_type = ?1 AND usage_date = ?2
+        "#,
+    )
+    .bind(subject_type)
+    .bind(date.to_string())
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
 }
 
 async fn get_phone_pool(

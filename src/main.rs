@@ -512,7 +512,7 @@ const ADMIN_HTML: &str = r#"<!doctype html>
     .login-card { width: min(420px, 100%); background: #fff; border: 1px solid #dfe4ec; border-radius: 8px; padding: 22px; box-shadow: 0 10px 32px rgba(17, 24, 39, .08); }
     .login-card p { color: #5b6472; line-height: 1.5; margin: 4px 0 18px; }
     .panel { background: #fff; border: 1px solid #dfe4ec; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
-    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
     .stat { border: 1px solid #e5e9f0; border-radius: 8px; padding: 14px; background: #fbfcfd; color: #5b6472; }
     .stat strong { display: block; color: #111827; font-size: 24px; margin-top: 6px; }
     .toolbar { display: grid; grid-template-columns: 2fr repeat(5, 1fr); gap: 12px; align-items: end; }
@@ -526,6 +526,7 @@ const ADMIN_HTML: &str = r#"<!doctype html>
     .error { color: #b91c1c; }
     .ok { color: #047857; }
     .hidden { display: none !important; }
+    @media (max-width: 1100px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     @media (max-width: 960px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grant { grid-template-columns: 1fr; } }
     @media (max-width: 560px) { main { padding: 14px; } .topbar { padding: 14px; } .stats, .toolbar { grid-template-columns: 1fr; } }
   </style>
@@ -555,7 +556,9 @@ const ADMIN_HTML: &str = r#"<!doctype html>
   <main id="appView" class="hidden">
     <section class="stats">
       <div class="stat">注册手机号数<strong id="registered">0</strong></div>
+      <div class="stat">androidid 数<strong id="androidIds">0</strong></div>
       <div class="stat">今日手机号总消耗<strong id="used">0</strong></div>
+      <div class="stat">今日 androidid 总消耗<strong id="androidUsed">0</strong></div>
       <div class="stat">可存池总余额<strong id="pool">0</strong></div>
       <div class="stat">达到日额度人数<strong id="overLimit">0</strong></div>
     </section>
@@ -682,7 +685,9 @@ const ADMIN_HTML: &str = r#"<!doctype html>
 
     function render(data) {
       setText("registered", number(data.totals.registered_phone_count));
+      setText("androidIds", number(data.totals.android_id_count));
       setText("used", number(data.totals.today_phone_used_tokens));
+      setText("androidUsed", number(data.totals.today_android_id_used_tokens));
       setText("pool", number(data.totals.total_pool_balance));
       setText("overLimit", number(data.totals.over_daily_limit_count));
       $("users").innerHTML = data.users.map(user => `
