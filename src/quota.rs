@@ -36,6 +36,8 @@ pub enum QuotaError {
     PhoneAlreadyRegistered,
     #[error("invite code does not exist")]
     InvalidInviteCode,
+    #[error("phone is required to query invite code")]
+    PhoneRequired,
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
@@ -56,6 +58,12 @@ pub struct QuotaStatus {
     pub daily_limit: i64,
     pub usage_ratio: f64,
     pub pool_balance: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InviteCodeInfo {
+    pub phone: String,
+    pub invite_code: String,
 }
 
 impl QuotaStore {
@@ -319,6 +327,22 @@ impl QuotaStore {
         config: &QuotaConfig,
     ) -> Result<QuotaStatus> {
         self.quota_status_for_date(principal, config, today()).await
+    }
+
+    pub async fn invite_code_for_principal(&self, principal: &Principal) -> Result<InviteCodeInfo> {
+        let Principal::IdAndPhone { phone, .. } = principal else {
+            return Err(QuotaError::PhoneRequired);
+        };
+
+        let mut tx = self.pool.begin().await?;
+        ensure_phone_account_row(&mut tx, phone).await?;
+        let invite_code = get_phone_invite_code(&mut tx, phone).await?;
+        tx.commit().await?;
+
+        Ok(InviteCodeInfo {
+            phone: phone.to_owned(),
+            invite_code,
+        })
     }
 
     async fn quota_status_for_date(
@@ -654,6 +678,18 @@ async fn get_phone_user_id(
         .bind(phone)
         .fetch_one(conn)
         .await?;
+    Ok(row.0)
+}
+
+async fn get_phone_invite_code(
+    conn: &mut SqliteConnection,
+    phone: &str,
+) -> std::result::Result<String, sqlx::Error> {
+    let row: (String,) =
+        sqlx::query_as("SELECT invite_code FROM phone_account WHERE phone = ?1")
+            .bind(phone)
+            .fetch_one(conn)
+            .await?;
     Ok(row.0)
 }
 

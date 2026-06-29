@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/v1/register", post(register_phone))
         .route("/v1/quota", get(get_quota))
+        .route("/v1/invite-code", get(get_invite_code))
         .route("/v1/beta/chat/completions", post(chat_completions))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -141,6 +142,32 @@ async fn get_quota(State(state): State<AppState>, headers: HeaderMap) -> Respons
             daily_limit: status.daily_limit,
             usage_ratio: status.usage_ratio,
             pool_balance: status.pool_balance,
+        })
+        .into_response(),
+        Err(err) => quota_error_response(err),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct InviteCodeResponse {
+    phone: String,
+    invite_code: String,
+}
+
+async fn get_invite_code(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let principal = match parse_authorization(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+    ) {
+        Ok(principal) => principal,
+        Err(err) => return quota_error_response(err),
+    };
+
+    match state.quota.invite_code_for_principal(&principal).await {
+        Ok(info) => Json(InviteCodeResponse {
+            phone: info.phone,
+            invite_code: info.invite_code,
         })
         .into_response(),
         Err(err) => quota_error_response(err),
@@ -304,6 +331,11 @@ fn quota_error_response(err: QuotaError) -> Response {
         QuotaError::InvalidInviteCode => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "invite code does not exist"})),
+        )
+            .into_response(),
+        QuotaError::PhoneRequired => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "phone is required to query invite code"})),
         )
             .into_response(),
         QuotaError::Database(err) => {
